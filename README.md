@@ -14,6 +14,16 @@ regression tasks.
 </p>
 </figure>
 
+## Environment Setup
+- Dev container setup.
+- venv setup
+1. 仮想環境を .venv ディレクトリに作成
+uv venv .venv
+2. 仮想環境を有効化
+source .venv/bin/activate
+3. 開発モードでインストール
+uv pip install -e .
+
 ## Usage
 There are two main stages: **inference** and **pretraining** (optional).
 
