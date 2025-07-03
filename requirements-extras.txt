@@ -1,1 +1,6 @@
-# TODO(team): Fill in requirements for extras.
+# For data processing
+pandas
+numpy
+
+# For visualization
+matplotlib

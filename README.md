@@ -21,8 +21,10 @@ regression tasks.
 uv venv .venv
 2. 仮想環境を有効化
 source .venv/bin/activate
-3. 開発モードでインストール
+3. 開発モードでインストール (基本パッケージのみ)
 uv pip install -e .
+4. (オプション) 可視化など追加機能を含めてインストールする場合
+uv pip install -e ".[extras]"
 
 ## Usage
 There are two main stages: **inference** and **pretraining** (optional).
