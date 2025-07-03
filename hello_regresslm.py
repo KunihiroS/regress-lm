@@ -66,6 +66,18 @@ def plot_distribution(samples: List[float], label: str, stats: Dict[str, float],
     logging.info(f"分布ヒストグラム画像を {fname} に保存しました。")
 
 
+def print_samples(label: str, samples: List[float], max_print: int = 32):
+    """推測値をprintで出力する（長すぎる場合は先頭・末尾のみ）。"""
+    samples = np.array(samples)
+    total = len(samples)
+    if total <= max_print:
+        print(f"{label} samples: {samples}")
+    else:
+        head = samples[:max_print // 2]
+        tail = samples[-max_print // 2:]
+        print(f"{label} samples: {head.tolist()} ... {tail.tolist()} (total {total})")
+
+
 def main():
     """メイン実行関数"""
     # 画像保存ディレクトリとタイムスタンプ
@@ -80,8 +92,8 @@ def main():
     # 2. ファインチューニング
     logging.info("ステップ2: ファインチューニング用のデータを準備し、モデルを微調整します...")
     examples = [
-        core.Example(x='hello', y=0.3),
-        core.Example(x='world', y=-0.3)
+        core.Example(x='King', y=0.3),
+        core.Example(x='Queen', y=-0.3)
     ]
     reg_lm.fine_tune(examples)
     logging.info("モデルのファインチューニングが完了しました。")
@@ -89,8 +101,8 @@ def main():
     # 3. 推論
     logging.info("ステップ3: 推論用のクエリを準備します...")
     queries = [
-        core.ExampleInput(x='hi'),
-        core.ExampleInput(x='bye')
+        core.ExampleInput(x='men'),
+        core.ExampleInput(x='female')
     ]
     logging.info(f"ステップ4: モデルを使って予測（サンプリング数: {NUM_SAMPLES}）を実行します...")
     results = reg_lm.sample(queries, num_samples=NUM_SAMPLES)
@@ -100,6 +112,10 @@ def main():
     logging.info("--- 予測結果の分析 ---")
     for query, samples in zip(queries, results):
         label = query.x
+
+        # 推測値をprintで出力
+        print_samples(label, samples, max_print=32)
+
         stats = calculate_statistics(samples, ABNORMAL_THRESHOLD)
 
         logging.info(
