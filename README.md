@@ -17,14 +17,25 @@ regression tasks.
 ## Environment Setup
 - Dev container setup.
 - venv setup
++Note: このプロジェクトでは `python3 -m venv` と `uv` CLI を使って仮想環境作成と依存管理を行います。
 1. 仮想環境を .venv ディレクトリに作成
-uv venv .venv
+```sh
+python3 -m venv .venv
+```
 2. 仮想環境を有効化
+```sh
 source .venv/bin/activate
-3. 開発モードでインストール (基本パッケージのみ)
-uv pip install -e .
-4. (オプション) 可視化など追加機能を含めてインストールする場合
-uv pip install -e ".[extras]"
+```
+3. 開発モードでインストール
+   - **CPU版をインストールする場合:**
+     ```sh
+     uv pip install -e ".[extras]"
+     ```
+   - **GPU版 (CUDA 12.1) をインストールする場合:**
+     PyTorchのGPU対応版をインストールするために、追加のフラグが必要です。
+     ```sh
+     uv pip install -e ".[extras]" --extra-index-url https://download.pytorch.org/whl/cu121
+     ```
 
 ## Usage
 There are two main stages: **inference** and **pretraining** (optional).

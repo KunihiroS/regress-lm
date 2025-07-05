@@ -1,5 +1,6 @@
 absl-py
 numpy
+matplotlib
 
 # For vocabs.
 ordered-set

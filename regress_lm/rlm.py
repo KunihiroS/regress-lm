@@ -14,6 +14,7 @@
 
 """Very high-level class for users."""
 
+import logging
 from typing import Sequence
 import numpy as np
 from regress_lm import core
@@ -21,6 +22,7 @@ from regress_lm import tokenizers
 from regress_lm import vocabs
 from regress_lm.models import base as model_base
 from regress_lm.models.pytorch import model as pytorch_model
+import torch
 
 
 class RegressLM:
@@ -41,7 +43,8 @@ class RegressLM:
   @classmethod
   def from_default(cls, **kwargs) -> "RegressLM":
     """Creates a RegressLM with default model and finetuner."""
-
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    logging.info(f"Using device: {device}")
     encoder_vocab = vocabs.SentencePieceVocab.from_t5()
     decoder_vocab = vocabs.DecoderVocab(tokenizers.P10Tokenizer())
     model = pytorch_model.PyTorchModel(
@@ -55,7 +58,9 @@ class RegressLM:
         num_decoder_layers=kwargs.get("num_decoder_layers", 2),
         dim_feedforward=kwargs.get("dim_feedforward", 2048),
         dropout=kwargs.get("dropout", 0.0),
+        device=device,
     )
+    model.to(device)
 
     fine_tuner = pytorch_model.PyTorchFineTuner(model)
     return cls(model, fine_tuner)
@@ -65,5 +70,19 @@ class RegressLM:
   ) -> Sequence[np.ndarray]:
     """Samples from the model."""
     examples = self.model.convert_inputs(xs)
-    _, output_floats = self.model.decode(examples, num_samples)
+    # CUDAメモリが8GB以下の場合はチャンクでサンプリング
+    if self.model.device.type == 'cuda':
+      total_mem = torch.cuda.get_device_properties(self.model.device).total_memory
+      if total_mem <= 8 * 1024**3:
+        chunk_size = 32
+        chunks = []
+        for start in range(0, num_samples, chunk_size):
+          c = min(chunk_size, num_samples - start)
+          _, chunk_out = self.model.decode(examples, c)
+          chunks.append(chunk_out)
+        output_floats = np.concatenate(chunks, axis=1)
+      else:
+        _, output_floats = self.model.decode(examples, num_samples)
+    else:
+      _, output_floats = self.model.decode(examples, num_samples)
     return [y.squeeze(axis=0) for y in np.split(output_floats, len(xs), axis=0)]
