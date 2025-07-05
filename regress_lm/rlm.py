@@ -70,19 +70,25 @@ class RegressLM:
   ) -> Sequence[np.ndarray]:
     """Samples from the model."""
     examples = self.model.convert_inputs(xs)
-    # CUDAメモリが8GB以下の場合はチャンクでサンプリング
     if self.model.device.type == 'cuda':
-      total_mem = torch.cuda.get_device_properties(self.model.device).total_memory
-      if total_mem <= 8 * 1024**3:
-        chunk_size = 32
-        chunks = []
-        for start in range(0, num_samples, chunk_size):
-          c = min(chunk_size, num_samples - start)
-          _, chunk_out = self.model.decode(examples, c)
-          chunks.append(chunk_out)
-        output_floats = np.concatenate(chunks, axis=1)
-      else:
-        _, output_floats = self.model.decode(examples, num_samples)
+        prop = torch.cuda.get_device_properties(self.model.device)
+        total_mem = prop.total_memory
+        mem_gib = total_mem / (1024**3)
+        logging.info(f"GPU VRAM total: {mem_gib:.2f} GiB")
+        if total_mem <= 8 * 1024**3:
+            chunk_size = 32
+            logging.info(f"VRAM <=8 GiB, sampling in chunks of {chunk_size}")
+            chunks = []
+            for start in range(0, num_samples, chunk_size):
+                c = min(chunk_size, num_samples - start)
+                logging.debug(f"Sampling chunk: start={start}, size={c}")
+                _, chunk_out = self.model.decode(examples, c)
+                chunks.append(chunk_out)
+            output_floats = np.concatenate(chunks, axis=1)
+        else:
+            logging.info(f"VRAM >8 GiB, sampling all {num_samples} samples at once")
+            _, output_floats = self.model.decode(examples, num_samples)
     else:
-      _, output_floats = self.model.decode(examples, num_samples)
+        logging.info(f"CPU mode, sampling all {num_samples} samples")
+        _, output_floats = self.model.decode(examples, num_samples)
     return [y.squeeze(axis=0) for y in np.split(output_floats, len(xs), axis=0)]
