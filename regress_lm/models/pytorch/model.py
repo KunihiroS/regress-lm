@@ -14,6 +14,7 @@
 
 """PyTorch implementation of a RegressLM."""
 
+import logging
 import math
 from typing import Sequence
 import numpy as np
@@ -289,22 +290,36 @@ class PyTorchFineTuner(model_base.FineTuner):
     valid_losses = []
     state = self.model.state_dict()
     prev_state = state
-    for _ in range(max_epochs):
+    for epoch in range(max_epochs):
       self.model.eval()  # Eval mode.
-      val_loss, _ = self.model.compute_loss_and_metrics(validation_tensors)
-      valid_losses.append(val_loss.detach().item())
+
+      # 検証損失をバッチ処理で計算し、OOMを回避
+      num_valid_batches = math.ceil(len(validation_examples) / batch_size)
+      total_val_loss = 0.0
+      with torch.no_grad():  # 検証では勾配計算は不要
+        for i in range(num_valid_batches):
+          val_inds = range(i * batch_size, min((i + 1) * batch_size, len(validation_examples)))
+          val_batch = {k: v[val_inds].to(self.model.device) for k, v in validation_tensors.items()}
+          val_loss, _ = self.model.compute_loss_and_metrics(val_batch)
+          total_val_loss += val_loss.item()
+      avg_val_loss = total_val_loss / num_valid_batches
+      valid_losses.append(avg_val_loss)
 
       if _detect_overfitting(valid_losses):
+        logging.info(f"エポック {epoch + 1}: 過学習を検知したため、トレーニングを早期終了します。")
         state = prev_state
         break
 
       prev_state = state
       num_batches = math.ceil(len(examples) / batch_size)
       all_indices = rng.permutation(len(examples))
+      logging.info(f"エポック {epoch + 1}/{max_epochs} を開始します ({num_batches} バッチ)")
       for i in range(num_batches):
+        logging.debug(f"  バッチ {i + 1}/{num_batches} を処理中...")
         inds = all_indices[i * batch_size : (i + 1) * batch_size]
         batch = {k: v[inds].to(self.model.device) for k, v in train_tensors.items()}
         _train_step(self.model, self.optimizer, batch)
       state = self.model.state_dict()
 
     self.model.load_state_dict(state)
+    logging.info("ファインチューニングの全エポックが完了しました。")

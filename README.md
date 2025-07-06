@@ -36,6 +36,8 @@ source .venv/bin/activate
      ```sh
      uv pip install -e ".[extras]" --extra-index-url https://download.pytorch.org/whl/cu121
      ```
+   - .[extras] は requirements.txt と requirements-extras.txt の依存関係をインストールします。
+
 
 ## Usage
 There are two main stages: **inference** and **pretraining** (optional).
