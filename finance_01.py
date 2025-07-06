@@ -1,6 +1,5 @@
 import logging
 import os
-import time
 from datetime import datetime
 from typing import Dict, List
 import glob
@@ -11,12 +10,6 @@ import numpy as np
 from regress_lm import core
 from regress_lm import rlm
 
-# --- パス設定 ---
-# このスクリプトの場所を基準にプロジェクトルートを決定
-# /home/kunihiros/dev/regress-lm/test/finance_01.py -> /home/kunihiros/dev/regress-lm
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
 # --- ロギング設定 ---
 logging.basicConfig(
     level=logging.DEBUG,
@@ -24,7 +17,7 @@ logging.basicConfig(
 )
 
 # --- 設定値・定数 ---
-OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output")
+OUTPUT_DIR = "output"
 NUM_SAMPLES = 128
 ABNORMAL_THRESHOLD = 10
 """
@@ -91,8 +84,8 @@ def plot_distribution(samples: List[float], label: str, stats: Dict[str, float],
     logging.info(f"分布ヒストグラム画像を {fname} に保存しました。")
 
 
-def save_statistics_to_file(label: str, stats: Dict[str, float], timing_data: Dict[str, float], output_dir: str, timestamp: str):
-    """計算された統計量と処理時間をテキストファイルに保存する。"""
+def save_statistics_to_file(label: str, stats: Dict[str, float], output_dir: str, timestamp: str):
+    """計算された統計量をテキストファイルに保存する。"""
     safe_label = sanitize_label_for_filename(label)
     fname = f"{output_dir}/{timestamp}_{safe_label}_result.txt"
     with open(fname, 'w', encoding='utf-8') as f:
@@ -103,12 +96,7 @@ def save_statistics_to_file(label: str, stats: Dict[str, float], timing_data: Di
                 f.write(f"- {key}: {value:.4f}\n")
             else:
                 f.write(f"- {key}: {value}\n")
-        
-        f.write("\n--- Performance ---\n")
-        for key, value in timing_data.items():
-            f.write(f"- {key}: {value:.2f}\n")
-
-    logging.info(f"統計情報と処理時間を {fname} に保存しました。")
+    logging.info(f"統計情報を {fname} に保存しました。")
 
 
 def print_samples(label: str, samples: List[float], max_print: int = 32):
@@ -128,21 +116,17 @@ def main():
     # 画像保存ディレクトリとタイムスタンプ
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    timing_data = {}
 
     # 1. モデルのインスタンスを作成
     logging.info("ステップ1: RegressLMモデルのインスタンスを作成します...")
-    start_time = time.time()
     reg_lm = rlm.RegressLM.from_default(max_input_len=2048)
-    timing_data['model_instantiation_sec'] = time.time() - start_time
-    logging.info(f"モデルのインスタンス作成が完了しました。({timing_data['model_instantiation_sec']:.2f}秒)")
+    logging.info("モデルのインスタンス作成が完了しました。")
 
     # 2. ファインチューニング
     logging.info("ステップ2: ファインチューニング用のデータを準備し、モデルを微調整します...")
-    start_time = time.time()
     
     # YAMLファイルからファインチューニングデータを読み込む
-    finetune_data_dir = os.path.join(PROJECT_ROOT, "test/data/finance_01/finetuning/")
+    finetune_data_dir = "test/data/finance_01/finetuning/"
     logging.info(f"ディレクトリからファインチューニングデータを検索中: {finetune_data_dir}")
     finetune_files = glob.glob(os.path.join(finetune_data_dir, "*.yml"))
     
@@ -157,14 +141,13 @@ def main():
 
     logging.info("ファインチューニングを開始します...")
     reg_lm.fine_tune(examples, batch_size=1)
-    timing_data['fine_tuning_sec'] = time.time() - start_time
-    logging.info(f"モデルのファインチューニングが完了しました。({timing_data['fine_tuning_sec']:.2f}秒)")
+    logging.info("モデルのファインチューニングが完了しました。")
 
     # 3. 推論
     logging.info("ステップ3: 推論用のクエリを準備します...")
     
     # テスト用YAMLファイルからクエリを読み込む
-    test_file_path = os.path.join(PROJECT_ROOT, "test/data/finance_01/test_target.yml")
+    test_file_path = "test/data/finance_01/test_target.yml"
     logging.info(f"テスト用クエリを読み込み中: {test_file_path}")
     with open(test_file_path, 'r') as f:
         test_data = yaml.safe_load(f)
@@ -175,10 +158,8 @@ def main():
     logging.info("クエリの準備が完了しました。")
 
     logging.info(f"ステップ4: モデルを使って予測（サンプリング数: {NUM_SAMPLES}）を実行します...")
-    start_time = time.time()
     results = reg_lm.sample(queries, num_samples=NUM_SAMPLES)
-    timing_data['inference_sec'] = time.time() - start_time
-    logging.info(f"サンプリングが完了しました。({timing_data['inference_sec']:.2f}秒)")
+    logging.info("サンプリングが完了しました。")
 
     # 4. 結果の分析と可視化
     logging.info("--- 予測結果の分析 ---")
@@ -199,7 +180,7 @@ def main():
         )
 
         plot_distribution(samples, label, stats, OUTPUT_DIR, timestamp)
-        save_statistics_to_file(label, stats, timing_data, OUTPUT_DIR, timestamp)
+        save_statistics_to_file(label, stats, OUTPUT_DIR, timestamp)
 
 
 if __name__ == "__main__":
