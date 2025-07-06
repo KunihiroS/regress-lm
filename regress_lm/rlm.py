@@ -42,7 +42,7 @@ class RegressLM:
 
   @classmethod
   def from_default(cls, **kwargs) -> "RegressLM":
-    """Creates a RegressLM with default model and finetuner."""
+    """Creates a RegressLM with default model and finetuner (~60M parameters)."""
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logging.info(f"Using device: {device}")
     encoder_vocab = vocabs.SentencePieceVocab.from_t5()
@@ -54,8 +54,11 @@ class RegressLM:
         learning_rate=kwargs.get("learning_rate", 1e-4),
         d_model=kwargs.get("d_model", 512),
         nhead=kwargs.get("nhead", 8),
-        num_encoder_layers=kwargs.get("num_encoder_layers", 2),
-        num_decoder_layers=kwargs.get("num_decoder_layers", 2),
+        # 変更: 論文規模60Mパラメータに合わせて層数を2→4に増加
+        # num_encoder_layers=kwargs.get("num_encoder_layers", 2),  # 旧30M設定
+        # num_decoder_layers=kwargs.get("num_decoder_layers", 2),  # 旧30M設定
+        num_encoder_layers=kwargs.get("num_encoder_layers", 4),  # 新60M設定
+        num_decoder_layers=kwargs.get("num_decoder_layers", 4),  # 新60M設定
         dim_feedforward=kwargs.get("dim_feedforward", 2048),
         dropout=kwargs.get("dropout", 0.0),
         device=device,
