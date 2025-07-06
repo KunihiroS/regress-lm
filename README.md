@@ -38,6 +38,16 @@ source .venv/bin/activate
      ```
    - .[extras] は requirements.txt と requirements-extras.txt の依存関係をインストールします。
 
+## TODO
+
+- [x] 60Mパラメータモデルでの動作確認
+- [x] GPU OOMエラーの解決（学習・推論時のバッチ処理化）
+- [x] 金融ニュース（ポジティブ）でのファインチューニングと推論テスト (`finance_01`)
+- [ ] 金融ニュース（ネガティブ）での推論テスト (`finance_02`)
+- [ ] 異なるドメイン（例：製品レビューのスコア予測）での汎化性能テスト
+- [ ] ハイパーパラメータ（学習率、エポック数など）の調整と性能評価
+- [ ] テスト結果の自動集計とレポート機能
+
 
 ## Usage
 There are two main stages: **inference** and **pretraining** (optional).
