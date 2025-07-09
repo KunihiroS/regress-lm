@@ -1,0 +1,382 @@
+# Copyright 2025 Google LLC.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""PyTorch implementation of a RegressLM."""
+
+import logging
+import math
+import os
+from typing import Sequence
+import numpy as np
+from regress_lm import core
+from regress_lm import vocabs
+from regress_lm.models import base as model_base
+from regress_lm.models.pytorch import architecture
+import torch
+from torch import nn
+from torch import optim
+import torch.nn.functional as F
+
+NEG_INF = -1.0e7
+
+# Dict Keys: "encoder_input", "decoder_input", "decoder_target"
+Tensor = torch.Tensor
+
+
+class PyTorchModel(nn.Module, model_base.Model[Tensor]):
+  """PyTorch implementation of a RegressLM."""
+
+  def __init__(
+      self,
+      encoder_vocab: vocabs.EncoderVocab[str],
+      decoder_vocab: vocabs.DecoderVocab[float],
+      max_input_len: int = 2048,
+      learning_rate: float = 1e-4,
+      z_loss_coef: float | None = None,
+      device: torch.device | None = None,
+      **architecture_kwargs,
+  ):
+    super().__init__()
+    self.max_input_len = max_input_len
+    self.z_loss_coef = z_loss_coef
+    self.device = device or torch.device('cpu')
+
+    self.encoder_vocab = encoder_vocab
+    self.decoder_vocab = decoder_vocab
+
+    self.encoder_decoder = architecture.EncoderDecoder(
+        encoder_vocab=self.encoder_vocab,
+        decoder_vocab=self.decoder_vocab,
+        max_encoder_len=self.max_input_len,
+        **architecture_kwargs,
+    )
+
+    # Pre-compute the constraint masks for the decoder.
+    self.register_buffer(
+        'decoder_constraint_masks', self._create_decoder_constraint_masks()
+    )
+
+  def save_model(self, filepath: str) -> None:
+    """モデルの状態をファイルに保存します。
+    
+    Args:
+        filepath: 保存先のファイルパス（.pth拡張子推奨）
+    """
+    # モデルの状態辞書を準備
+    save_dict = {
+        'model_state_dict': self.state_dict(),
+        'max_input_len': self.max_input_len,
+        'learning_rate': getattr(self, 'learning_rate', 1e-4),
+        'z_loss_coef': self.z_loss_coef,
+        'architecture_kwargs': {
+            'd_model': self.encoder_decoder.d_model,
+            'nhead': self.encoder_decoder.encoder.layers[0].nhead,
+            'num_encoder_layers': len(self.encoder_decoder.encoder.layers),
+            'num_decoder_layers': len(self.encoder_decoder.decoder.layers),
+            'dim_feedforward': self.encoder_decoder.encoder.layers[0].linear1.out_features,
+            'dropout': self.encoder_decoder.emb_dropout.p,
+        }
+    }
+    
+    # ディレクトリが存在しない場合は作成（ディレクトリ部分がある場合のみ）
+    dir_path = os.path.dirname(filepath)
+    if dir_path:  # ディレクトリ部分が存在する場合のみ作成
+        os.makedirs(dir_path, exist_ok=True)
+    
+    # モデルを保存
+    torch.save(save_dict, filepath)
+    logging.info(f"モデルを保存しました: {filepath}")
+
+  def load_model(self, filepath: str) -> None:
+    """保存されたモデルの状態を読み込みます。
+    
+    Args:
+        filepath: 読み込み元のファイルパス
+    """
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"モデルファイルが見つかりません: {filepath}")
+    
+    # モデルを読み込み
+    checkpoint = torch.load(filepath, map_location=self.device, weights_only=True)
+    
+    # モデルの状態辞書を読み込み
+    self.load_state_dict(checkpoint['model_state_dict'])
+    
+    # 設定値を更新
+    self.max_input_len = checkpoint.get('max_input_len', self.max_input_len)
+    self.z_loss_coef = checkpoint.get('z_loss_coef', self.z_loss_coef)
+    
+    # モデルを評価モードに設定
+    self.eval()
+    
+    logging.info(f"モデルを読み込みました: {filepath}")
+    logging.info(f"設定値 - max_input_len: {self.max_input_len}, z_loss_coef: {self.z_loss_coef}")
+
+  def compute_loss_and_metrics(
+      self, examples: dict[str, Tensor]
+  ) -> tuple[Tensor, dict[str, Tensor]]:
+    metrics = {}
+    logits = self.encoder_decoder.forward(
+        examples['encoder_input'], examples['decoder_input']
+    )
+    targets = examples['decoder_target']
+    loss = F.cross_entropy(
+        logits.reshape(-1, logits.shape[-1]),  # (B * L_decode, V)
+        targets.reshape(-1),  # Reshape to (B * L_decode)
+        ignore_index=self.decoder_vocab.bos_pad_id,
+    )
+    metrics['ce_loss'] = loss.detach()
+
+    if self.z_loss_coef is not None:
+      # Calculate z_loss (log-softmax normalization constant).
+      log_z = torch.logsumexp(logits, dim=-1)  # (B * L_decode)
+      z_loss_per_token = self.z_loss_coef * (log_z**2)
+
+      # Calculate the mean z_loss over the real (non-padded) tokens.
+      loss_mask = (targets != self.decoder_vocab.bos_pad_id).float()
+      z_loss = (z_loss_per_token * loss_mask).sum() / loss_mask.sum()
+      metrics['z_loss'] = z_loss.detach()
+      loss += z_loss
+
+    metrics['loss'] = loss.detach()
+    return loss, metrics
+
+  @torch.no_grad()
+  def decode(
+      self, inputs: dict[str, Tensor], num_samples: int
+  ) -> tuple[Tensor, np.ndarray]:
+    self.encoder_decoder.eval()
+    encoder_input = inputs['encoder_input']  # (B, L_src)
+    batch_size = encoder_input.shape[0]
+    # memory: (B, L_src, D_model), memory_key_padding_mask: (B, L_src)
+    memory, memory_key_padding_mask = self.encoder_decoder.encode(encoder_input)
+
+    # Expand/Repeat encoder outputs and masks for num_samples
+    # Effectively, new batch_size = B * num_samples
+    # memory: (B, L_src, D) -> (B, 1, L_src, D) -> (B, S, L_src, D)
+    # -> (B*S, L_src, D)
+    expanded_memory = (
+        memory.unsqueeze(1)
+        .repeat(1, num_samples, 1, 1)
+        .view(batch_size * num_samples, memory.size(1), memory.size(2))
+    )
+    expanded_memory_key_padding_mask = (
+        memory_key_padding_mask.unsqueeze(1)
+        .repeat(1, num_samples, 1)
+        .view(batch_size * num_samples, memory_key_padding_mask.size(1))
+    )
+
+    # Initialize decoder input for the expanded batch, start with <pad>.
+    current_tgt_ids = torch.full(
+        (batch_size * num_samples, 1),
+        self.decoder_vocab.bos_pad_id,
+        dtype=torch.long,
+        device=self.device,
+    )
+
+    # Store all generated token IDs for all sequences in the expanded batch
+    decode_len = self.decoder_vocab.decode_len
+    generated_sequences_ids = torch.zeros(
+        (batch_size * num_samples, decode_len),
+        dtype=torch.long,
+        device=self.device,
+    )
+
+    # Batched autoregressive decoding loop
+    for step_idx in range(decode_len):
+      # Get logits for the next token for all (B * num_samples) sequences
+      # Shape: (B*S, V)
+      logits = self.encoder_decoder.next_token_logits(
+          current_tgt_ids, expanded_memory, expanded_memory_key_padding_mask
+      )
+
+      # Apply constraints using the pre-computed mask
+      curr_mask = self.decoder_constraint_masks[step_idx, :]  # (V,)
+      curr_mask = curr_mask.unsqueeze(0)  # (1, V)
+      masked_logits = (1.0 - curr_mask) * NEG_INF + curr_mask * logits
+
+      # Apply temperature sampling, 1 token for each of the B*S sequences
+      temperature = 1.0
+      probs = F.softmax(masked_logits / temperature, dim=-1)
+      token_ids = torch.multinomial(probs, num_samples=1)  # (B*S, 1)
+      # Store the predicted token IDs
+      generated_sequences_ids[:, step_idx] = token_ids.squeeze(-1)
+
+      # Prepare input for the next step, but only if not the last float token
+      if step_idx < decode_len - 1:
+        current_tgt_ids = torch.cat([current_tgt_ids, token_ids], dim=1)
+
+    # Reshape outputs back to (B, num_samples, L_decode)
+    final_decoded_ids = generated_sequences_ids.view(
+        batch_size, num_samples, decode_len
+    )
+
+    # Compute equivalent floats.
+    output_floats = np.zeros((batch_size, num_samples), dtype=float)
+    for b in range(batch_size):
+      for s_idx in range(num_samples):
+        output_floats[b, s_idx] = self.decoder_vocab.from_token_ids(
+            final_decoded_ids[b, s_idx, :].cpu().tolist()
+        )
+
+    return final_decoded_ids, output_floats
+
+  def log_prob(self, examples: dict[str, Tensor]) -> Tensor:
+    self.encoder_decoder.eval()
+    enc_input = examples['encoder_input']
+    dec_input = examples['decoder_input']
+    dec_target = examples['decoder_target']
+
+    logits = self.encoder_decoder.forward(enc_input, dec_input)
+    log_probs = F.log_softmax(logits, dim=-1)
+
+    true_log_probs = torch.gather(
+        log_probs, dim=2, index=dec_target.unsqueeze(-1)
+    )
+
+    pad_mask = dec_target != self.decoder_vocab.bos_pad_id
+    true_log_probs_masked = true_log_probs.squeeze(-1) * pad_mask
+    sequence_sum_log_probs = true_log_probs_masked.sum(dim=1)
+    return sequence_sum_log_probs
+
+  def convert_inputs(
+      self, inputs: Sequence[core.ExampleInput]
+  ) -> dict[str, Tensor]:
+    strings = [example.x for example in inputs]
+    encoder_token_ids = [self.encoder_vocab.to_token_ids(s) for s in strings]
+    encoder_input = [self._pad_or_truncate(t) for t in encoder_token_ids]
+    return {'encoder_input': torch.tensor(encoder_input, device=self.device)}
+
+  def convert_examples(
+      self, examples: Sequence[core.Example]
+  ) -> dict[str, Tensor]:
+    y_values = [example.y for example in examples]
+    y_tokens = [self.decoder_vocab.to_token_ids(y) for y in y_values]
+    decoder_out = {
+        'decoder_input': torch.tensor(
+            [self._pad_front(t) for t in y_tokens], device=self.device
+        ),
+        'decoder_target': torch.tensor(
+            [self._pad_last(t) for t in y_tokens], device=self.device
+        ),
+    }
+    return self.convert_inputs(examples) | decoder_out
+
+  def _pad_or_truncate(self, token_ids: list[int]) -> list[int]:
+    encoder_pad_idx = self.encoder_vocab.pad_id
+    if len(token_ids) > self.max_input_len:
+      return token_ids[: self.max_input_len]
+    return token_ids + [encoder_pad_idx] * (self.max_input_len - len(token_ids))
+
+  def _pad_last(self, token_ids: list[int]) -> list[int]:
+    return token_ids + [self.decoder_vocab.bos_pad_id]
+
+  def _pad_front(self, token_ids: list[int]) -> list[int]:
+    return [self.decoder_vocab.bos_pad_id] + token_ids
+
+  def _create_decoder_constraint_masks(self) -> torch.Tensor:
+    num_float_tokens = self.decoder_vocab.decode_len
+    vocab_size = len(self.decoder_vocab)
+
+    logits_masks_np = np.zeros((num_float_tokens, vocab_size), dtype=np.float32)
+    for step_idx in range(num_float_tokens):
+      for allowed_token_id in self.decoder_vocab.token_ids_at_index(step_idx):
+        logits_masks_np[step_idx, allowed_token_id] = 1.0
+
+    return torch.from_numpy(logits_masks_np)
+
+
+def _detect_overfitting(losses: Sequence[float]) -> bool:
+  if len(losses) <= 1:
+    return False
+  return losses[-1] > losses[-2]
+
+
+def _train_step(
+    model: PyTorchModel,
+    optimizer: optim.Optimizer,
+    examples: dict[str, torch.Tensor],
+):
+  """Performs a single training step."""
+  model.train()
+  optimizer.zero_grad()
+  loss, _ = model.compute_loss_and_metrics(examples)
+  loss.backward()
+  optimizer.step()
+
+
+class PyTorchFineTuner(model_base.FineTuner):
+  """PyTorch implementation of a local finetuner."""
+
+  def __init__(
+      self, model: PyTorchModel, optimizer: optim.Optimizer | None = None
+  ):
+    self.model = model
+
+    if optimizer is None:
+      optimizer = optim.Adafactor(
+          filter(lambda p: p.requires_grad, self.model.parameters()), lr=1e-4
+      )
+    self.optimizer = optimizer
+
+  def fine_tune(
+      self,
+      examples: Sequence[core.Example],
+      validation_examples: Sequence[core.Example] | None = None,
+      max_epochs: int = 100,
+      batch_size: int | None = None,
+      seed: int | None = None,
+  ) -> None:
+    validation_examples = validation_examples or examples
+    validation_tensors = self.model.convert_examples(validation_examples)
+    batch_size = batch_size or len(examples)
+    train_tensors = self.model.convert_examples(examples)
+    rng = np.random.RandomState(seed)
+
+    valid_losses = []
+    state = self.model.state_dict()
+    prev_state = state
+    for epoch in range(max_epochs):
+      self.model.eval()  # Eval mode.
+
+      # 検証損失をバッチ処理で計算し、OOMを回避
+      num_valid_batches = math.ceil(len(validation_examples) / batch_size)
+      total_val_loss = 0.0
+      with torch.no_grad():  # 検証では勾配計算は不要
+        for i in range(num_valid_batches):
+          val_inds = range(i * batch_size, min((i + 1) * batch_size, len(validation_examples)))
+          val_batch = {k: v[val_inds].to(self.model.device) for k, v in validation_tensors.items()}
+          val_loss, _ = self.model.compute_loss_and_metrics(val_batch)
+          total_val_loss += val_loss.item()
+      avg_val_loss = total_val_loss / num_valid_batches
+      valid_losses.append(avg_val_loss)
+
+      if _detect_overfitting(valid_losses):
+        logging.info(f"エポック {epoch + 1}: 過学習を検知したため、トレーニングを早期終了します。")
+        state = prev_state
+        break
+
+      prev_state = state
+      num_batches = math.ceil(len(examples) / batch_size)
+      all_indices = rng.permutation(len(examples))
+      logging.info(f"エポック {epoch + 1}/{max_epochs} を開始します ({num_batches} バッチ)")
+      for i in range(num_batches):
+        logging.debug(f"  バッチ {i + 1}/{num_batches} を処理中...")
+        inds = all_indices[i * batch_size : (i + 1) * batch_size]
+        batch = {k: v[inds].to(self.model.device) for k, v in train_tensors.items()}
+        _train_step(self.model, self.optimizer, batch)
+      state = self.model.state_dict()
+
+    self.model.load_state_dict(state)
+    logging.info("ファインチューニングの全エポックが完了しました。")
