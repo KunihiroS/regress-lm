@@ -70,9 +70,47 @@ source .venv/bin/activate
     - 例：製品レビューの星評価予測、不動産の説明文からの価格予測など、金融以外のドメインでモデルの適応力を評価する。
 - [ ] **ハイパーパラメータの体系的なチューニング**
     - 学習率、エポック数、バッチサイズなどを調整し、性能への影響を体系的に評価する。
-- [ ] **テスト結果の自動集計とレポート機能**
+  - [ ] **テスト結果の自動集計とレポート機能**
     - 複数テストの結果を自動で集計し、比較・分析を容易にするスクリプトを整備する。
 
+
+## High-Level Design Overview
+- Centralize all path definitions in a new module `regress_lm/config.py`:
+  - `PROJECT_ROOT`, `OUTPUT_ROOT`, `MODEL_ROOT`, etc.
+- CLI entrypoints separated or unified via subcommands (`train` / `infer`), with generic names (e.g. `run_finetuning.py`).
+- Dynamic data-labeling: derive `data_label` from the basename of `--data-dir`, not hard-coded.
+- Consistent directory structure per run:
+  ```
+  output/<data_label>/<timestamp>/
+  saved_models/<data_label>/<timestamp>/
+  ```
+- Domain-agnostic script names and arguments (`--data-dir`, `--model-dir`, `--output-dir`).
+
+## Pending Implementation TODO
+- [ ] Create `regress_lm/config.py` to hold common path constants and environment overrides
+- [ ] Refactor sample scripts into generic CLI with subcommands for training and inference
+- [ ] Implement incremental fine-tuning support (`--additional-data` or `train --resume`) in training workflow
+- [ ] Update argument parsing to accept `--data-dir`, `--model-dir`, `--output-dir` and remove finance-specific defaults
+- [ ] Automate `data_label` extraction from provided data directory name
+- [ ] Update documentation and usage examples in README to reflect new design
+
+## Implementation Details
+
+### Model Initialization
+- Calling `RegressLM.from_default(max_input_len=...)` always creates a new `PyTorchModel` with standard PyTorch weight initialization.
+
+### Incremental Fine-Tuning Support
+- After fine-tuning, save the model state:
+  ```python
+  torch.save(reg_lm._model.state_dict(), "path/to/checkpoint.pt")
+  ```
+- To resume on additional data:
+  ```python
+  reg_lm = RegressLM.from_default(max_input_len=...)
+  state = torch.load("path/to/checkpoint.pt")
+  reg_lm._model.load_state_dict(state)
+  reg_lm.fine_tune(additional_examples)
+  ```
 
 ## Usage
 There are two main stages: **inference** and **pretraining** (optional).
