@@ -281,45 +281,43 @@ class PyTorchFineTuner(model_base.FineTuner):
       batch_size: int | None = None,
       seed: int | None = None,
   ) -> None:
+    # デフォルトバッチサイズ: GPU <=8GiBなら32, それ以外はfull
+    if batch_size is None:
+      total_mem = torch.cuda.get_device_properties(self.model.device).total_memory if self.model.device.type=='cuda' else 0
+      batch_size = 32 if total_mem <= 8 * 1024**3 else len(examples)
     validation_examples = validation_examples or examples
-    validation_tensors = self.model.convert_examples(validation_examples)
-    batch_size = batch_size or len(examples)
+    # TensorDatasetとDataLoaderによるバッチ処理
+    import torch.utils.data as data_utils
     train_tensors = self.model.convert_examples(examples)
+    val_tensors = self.model.convert_examples(validation_examples)
+    train_dataset = data_utils.TensorDataset(*[train_tensors[k] for k in train_tensors])
+    val_dataset = data_utils.TensorDataset(*[val_tensors[k] for k in val_tensors])
+    train_loader = data_utils.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = data_utils.DataLoader(val_dataset, batch_size=batch_size)
     rng = np.random.RandomState(seed)
-
-    valid_losses = []
-    state = self.model.state_dict()
-    prev_state = state
+    best_state = self.model.state_dict()
+    valid_losses: list[float] = []
     for epoch in range(max_epochs):
-      self.model.eval()  # Eval mode.
-
-      # 検証損失をバッチ処理で計算し、OOMを回避
-      num_valid_batches = math.ceil(len(validation_examples) / batch_size)
+      # Validation
+      self.model.eval()
       total_val_loss = 0.0
-      with torch.no_grad():  # 検証では勾配計算は不要
-        for i in range(num_valid_batches):
-          val_inds = range(i * batch_size, min((i + 1) * batch_size, len(validation_examples)))
-          val_batch = {k: v[val_inds].to(self.model.device) for k, v in validation_tensors.items()}
-          val_loss, _ = self.model.compute_loss_and_metrics(val_batch)
-          total_val_loss += val_loss.item()
-      avg_val_loss = total_val_loss / num_valid_batches
+      with torch.no_grad():
+        for batch in val_loader:
+          batch = {k: v.to(self.model.device) for k, v in zip(val_tensors.keys(), batch)}
+          loss, _ = self.model.compute_loss_and_metrics(batch)
+          total_val_loss += loss.item()
+      avg_val_loss = total_val_loss / len(val_loader)
       valid_losses.append(avg_val_loss)
-
       if _detect_overfitting(valid_losses):
-        logging.info(f"エポック {epoch + 1}: 過学習を検知したため、トレーニングを早期終了します。")
-        state = prev_state
+        logging.info(f"エポック {epoch+1}: 過学習検知、早期終了")
         break
-
-      prev_state = state
-      num_batches = math.ceil(len(examples) / batch_size)
-      all_indices = rng.permutation(len(examples))
-      logging.info(f"エポック {epoch + 1}/{max_epochs} を開始します ({num_batches} バッチ)")
-      for i in range(num_batches):
-        logging.debug(f"  バッチ {i + 1}/{num_batches} を処理中...")
-        inds = all_indices[i * batch_size : (i + 1) * batch_size]
-        batch = {k: v[inds].to(self.model.device) for k, v in train_tensors.items()}
+      # Training
+      self.model.train()
+      for batch in train_loader:
+        batch = {k: v.to(self.model.device) for k, v in zip(train_tensors.keys(), batch)}
         _train_step(self.model, self.optimizer, batch)
-      state = self.model.state_dict()
-
-    self.model.load_state_dict(state)
-    logging.info("ファインチューニングの全エポックが完了しました。")
+      best_state = self.model.state_dict()
+      logging.info(f"エポック {epoch+1}/{max_epochs} 完了 (batch_size={batch_size})")
+    # 最良モデル復元
+    self.model.load_state_dict(best_state)
+    logging.info("ファインチューニング完了")

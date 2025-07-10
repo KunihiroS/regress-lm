@@ -23,6 +23,82 @@ from regress_lm import vocabs
 from regress_lm.models import base as model_base
 from regress_lm.models.pytorch import model as pytorch_model
 import torch
+import yaml
+import matplotlib.pyplot as plt
+
+
+def calculate_statistics(samples: np.ndarray, threshold: float = 10.0) -> dict:
+    """サンプリング結果から各種統計量を計算する。"""
+    total_count = len(samples)
+
+    # 異常値の計算
+    abnormal_mask = np.abs(samples) > threshold
+    abnormal_count = np.sum(abnormal_mask)
+
+    # ヒストグラムベースのエントロピー計算
+    hist, bin_edges = np.histogram(samples, bins=20, density=True)
+    hist = hist + 1e-12  # log(0)回避
+    entropy = -np.sum(hist * np.log(hist)) * (bin_edges[1] - bin_edges[0])
+
+    return {
+        "mean": np.mean(samples),
+        "std": np.std(samples),
+        "entropy": entropy,
+        "abnormal_count": int(abnormal_count),
+        "total_count": int(total_count),
+        "abnormal_ratio": abnormal_count / total_count if total_count > 0 else 0,
+    }
+ 
+def load_examples_from_yaml(yaml_path: str) -> list[core.Example]:
+    """YAMLファイルからExampleオブジェクトのリストを読み込む。"""
+    with open(yaml_path, 'r') as f:
+        records = yaml.safe_load(f)
+    examples: list[core.Example] = []
+    for rec in records:
+        examples.append(core.Example(x=rec['x'], y=rec.get('y', None)))
+    return examples
+
+
+def save_statistics_and_plot(
+    query_text: str,
+    samples: np.ndarray,
+    output_dir: str,
+    performance_stats: dict | None = None
+):
+    """統計情報をテキストファイルに保存し、分布グラフをプロットする。"""
+    stats = calculate_statistics(samples)
+
+    # ファイル名の衝突を避けるため、クエリテキストをサニタイズ
+    safe_filename = "".join(c for c in query_text if c.isalnum() or c in (' ', '_')).rstrip()
+    if len(safe_filename) > 50: # ファイル名が長くなりすぎないように切り詰める
+        safe_filename = safe_filename[:50]
+    
+    base_filename = f"{output_dir}/{safe_filename}"
+
+    # 統計情報のテキストファイルを作成
+    with open(f"{base_filename}_result.txt", "w") as f:
+        f.write(f"Query: {query_text}\n\n")
+        f.write("--- Statistics ---\n")
+        for key, value in stats.items():
+            if isinstance(value, float):
+                f.write(f"- {key}: {value:.4f}\n")
+            else:
+                f.write(f"- {key}: {value}\n")
+        
+        if performance_stats:
+            f.write("\n--- Performance ---\n")
+            for key, value in performance_stats.items():
+                f.write(f"- {key}: {value:.2f}\n")
+
+    # 分布グラフをプロットして保存
+    plt.figure()
+    plt.hist(samples, bins=20, density=True, alpha=0.7)
+    plt.title(f"{query_text[:30]}... samples (mean={stats['mean']:.3f}, std={stats['std']:.3f})")
+    plt.xlabel("Predicted y")
+    plt.ylabel("Density")
+    plt.grid(True)
+    plt.savefig(f"{base_filename}_distribution.png")
+    plt.close()
 
 
 class RegressLM:
@@ -70,7 +146,7 @@ class RegressLM:
 
   def sample(
       self, xs: Sequence[core.ExampleInput], num_samples: int
-  ) -> Sequence[np.ndarray]:
+  ) -> Sequence[core.Example]:
     """Samples from the model."""
     examples = self.model.convert_inputs(xs)
     if self.model.device.type == 'cuda':
@@ -94,4 +170,12 @@ class RegressLM:
     else:
         logging.info(f"CPU mode, sampling all {num_samples} samples")
         _, output_floats = self.model.decode(examples, num_samples)
-    return [y.squeeze(axis=0) for y in np.split(output_floats, len(xs), axis=0)]
+    
+    # y_samplesを各ExampleInputに割り当てる
+    y_samples_list = [y.squeeze(axis=0) for y in np.split(output_floats, len(xs), axis=0)]
+    
+    results = []
+    for example_input, y_samples in zip(xs, y_samples_list):
+        results.append(core.Example(x=example_input.x, y=None, y_samples=y_samples))
+        
+    return results

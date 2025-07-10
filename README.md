@@ -84,6 +84,84 @@ source .venv/bin/activate
 - [x] 金融ニュース（ポジティブ）でのPoCテスト (`finance_01`)
 - [x] データリーク問題を特定・修正しての再テストと評価
 
+## How to use run_cli.py
+
+`run_cli.py` は、モデルの学習と推論を統一的に扱うためのコマンドラインインターフェースです。このスクリプトを使用することで、モデルの保存、追加学習、推論といった一連のライフサイクルを、一貫したディレクトリ構造と引数で管理できます。
+
+### 学習 (Training)
+
+#### 新規学習
+
+新しいデータセットでモデルを最初から学習させます。
+
+```sh
+python run_cli.py train \
+  --data-dir path/to/your/dataset \
+  --model-save-dir saved_models \
+  --output-dir output
+```
+
+-   `--data-dir`: `train.yml`（学習用データ）と `test.yml`（評価用データ）が含まれるディレクトリを指定します。各YAMLファイルは、以下のような `Example` オブジェクトのリスト形式で記述します。
+    ```yaml
+    - x: "some input text"
+      y: 0.5
+    - x: "another input text"
+      y: -0.2
+    ```
+    -   **補足**: モデルは `train.yml` のデータのみを使って学習します。`test.yml` のデータ（特に `y` の値）は、学習後にモデルが未知のデータに対してどれだけ正確な予測ができるか（汎化性能）を測定するためにのみ使用されます。学習中に `test.yml` の内容がモデルに漏れることはありません。
+-   このコマンドを実行すると、`saved_models/<dataset_name>/<timestamp>/checkpoint.pt` に学習済みモデルが、`output/<dataset_name>/<timestamp>/` に評価結果のグラフが保存されます。
+
+#### 追加学習 (Incremental Fine-Tuning)
+
+既存の学習済みモデルを、同じ種類のデータで追加学習させます。
+
+```sh
+python run_cli.py train \
+  --data-dir path/to/your/additional_dataset \
+  --model-save-dir saved_models \
+  --output-dir output \
+  --resume-from-checkpoint saved_models/<dataset_name>/<previous_timestamp>/checkpoint.pt
+```
+
+-   `--resume-from-checkpoint`: 追加学習のベースとなるモデルのパスを指定します。
+-   **安全性**: スクリプトは、チェックポイントのパスに含まれるデータラベル（`<dataset_name>`）と、`--data-dir` のデータラベルが一致するかを検証します。一致しない場合は、意図しないモデル汚染を防ぐためにエラーで停止します。
+
+### 推論 (Inference)
+
+学習済みのモデルを使って、新しいテキストに対する予測値を計算します。
+入力方法は、テキスト直接指定、ファイル指定、ディレクトリ指定の3つがあり、これらは同時に使用できません。
+結果は、デフォルトではコンソールに出力されますが、`--output-dir` を指定することでファイルに保存することも可能です。
+
+#### テキストを直接指定する場合 (コンソール出力)
+```sh
+python run_cli.py infer \
+  --checkpoint-path saved_models/<dataset_name>/<timestamp>/checkpoint.pt \
+  --text "This is a very positive news."
+```
+
+#### ファイルから読み込み、結果をファイルに保存する場合
+```sh
+python run_cli.py infer \
+  --checkpoint-path saved_models/<dataset_name>/<timestamp>/checkpoint.pt \
+  --input-file path/to/your/input.txt \
+  --output-dir path/to/your/output_directory
+```
+
+#### ディレクトリ内のファイルをすべて結合して単一の入力として指定する場合
+```sh
+python run_cli.py infer \
+  --checkpoint-path saved_models/<dataset_name>/<timestamp>/checkpoint.pt \
+  --input-dir path/to/your/inputs/ \
+  --output-dir path/to/your/output_directory
+```
+
+-   `--checkpoint-path`: 使用する学習済みモデルのパスを指定します。
+-   `--text`: 予測したい単一のテキストを指定します。
+-   `--input-file`: ファイルの内容全体を、単一の入力テキストとして扱います。
+-   `--input-dir`: 指定されたディレクトリ内のすべてのファイルの内容を結合し、単一の入力テキストとして扱います。
+-   `--output-dir` (オプション): 指定した場合、推論結果（統計情報テキストと分布グラフ）が指定されたディレクトリ配下の `<data_label>/<timestamp>` に保存されます。指定しない場合は、結果はコンソールに出力されます。
+-   `--text`, `--input-file`, `--input-dir` のいずれか1つのみを指定してください。
+
 ## Usage
 There are two main stages: **inference** and **pretraining** (optional).
 
