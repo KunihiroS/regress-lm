@@ -157,4 +157,16 @@ If you find this project useful, please consider citing our work as follows:
 }
 ```
 
+## Repository Structure
+
+-   `/regress_lm`: Main source code for the `regress_lm` package.
+    -   `rlm.py`: Core `RegressLM` class.
+    -   `models/pytorch`: PyTorch model implementations.
+-   `/test`: Test scripts and data.
+    -   `test_checkpoint_io.py`: Unit test for checkpoint functionality.
+    -   `finance_*.py`: End-to-end tests for different scenarios.
+-   `/work`: Working directory for checkpoints and other artifacts (ignored by Git).
+-   `/output`: Directory for inference results like graphs (ignored by Git).
+-   `README.md`: This file.
+
 **Disclaimer:** This is not an officially supported Google product.
