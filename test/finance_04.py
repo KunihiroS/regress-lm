@@ -124,17 +124,41 @@ def print_samples(label: str, samples: List[float], max_print: int = 32):
 
 def main():
     """メイン実行関数"""
-    # 画像保存ディレクトリとタイムスタンプ
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    # --- ディレクトリとパスの設定 ---
+    # このテストの名前（チェックポイントや出力のサブディレクトリ名になる）
+    TEST_NAME = "finance_test_01"
+    
+    # チェックポイントと出力のルートディレクトリ
+    CHECKPOINT_ROOT = os.path.join(PROJECT_ROOT, "work/model_checkpoints")
+    OUTPUT_ROOT = os.path.join(PROJECT_ROOT, "work/output")
+
+    # このテスト専用のディレクトリを作成
+    checkpoint_dir = os.path.join(CHECKPOINT_ROOT, TEST_NAME)
+    output_dir = os.path.join(OUTPUT_ROOT, TEST_NAME)
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)
+
+    # タイムスタンプと処理時間記録用の辞書
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     timing_data = {}
 
-    # 1. モデルのインスタンスを作成
-    logging.info("ステップ1: RegressLMモデルのインスタンスを作成します...")
+    # --- モデルの準備 ---
+    logging.info("--- ステップ1: モデルの準備 ---")
     start_time = time.time()
+    
+    # 1. モデルのインスタンスを作成
     reg_lm = rlm.RegressLM.from_default(max_input_len=2048)
-    timing_data['model_instantiation_sec'] = time.time() - start_time
-    logging.info(f"モデルのインスタンス作成が完了しました。({timing_data['model_instantiation_sec']:.2f}秒)")
+
+    # 2. 最新のチェックポイントを探して読み込む
+    checkpoint_path = os.path.join(checkpoint_dir, "latest_checkpoint.pth")
+    if os.path.exists(checkpoint_path):
+        logging.info(f"既存のチェックポイントを読み込みます: {checkpoint_path}")
+        reg_lm.load_checkpoint(checkpoint_path)
+    else:
+        logging.info("既存のチェックポイントが見つかりません。新しいモデルから開始します。")
+
+    timing_data['model_preparation_sec'] = time.time() - start_time
+    logging.info(f"モデルの準備が完了しました。 ({timing_data['model_preparation_sec']:.2f}秒)")
 
     # 2. ファインチューニング
     logging.info("ステップ2: ファインチューニング用のデータを準備し、モデルを微調整します...")
@@ -158,6 +182,13 @@ def main():
     reg_lm.fine_tune(examples, batch_size=1)
     timing_data['fine_tuning_sec'] = time.time() - start_time
     logging.info(f"モデルのファインチューニングが完了しました。({timing_data['fine_tuning_sec']:.2f}秒)")
+
+    # 2b. ファインチューニング後のモデルを保存
+    logging.info("ステップ2b: ファインチューニング後のモデルをチェックポイントとして保存します...")
+    start_time = time.time()
+    reg_lm.save_checkpoint(checkpoint_path)
+    timing_data['save_checkpoint_sec'] = time.time() - start_time
+    logging.info(f"チェックポイントの保存が完了しました。 ({timing_data['save_checkpoint_sec']:.2f}秒)")
 
     # 3. 推論
     logging.info("ステップ3: 推論用のクエリを準備します...")
@@ -197,8 +228,12 @@ def main():
             f"[閾値: |y| > {ABNORMAL_THRESHOLD}]"
         )
 
-        plot_distribution(samples, label, stats, OUTPUT_DIR, timestamp)
-        save_statistics_to_file(label, stats, timing_data, OUTPUT_DIR, timestamp)
+        # このテスト実行に紐づく出力サブディレクトリを作成
+        current_output_dir = os.path.join(output_dir, timestamp)
+        os.makedirs(current_output_dir, exist_ok=True)
+
+        plot_distribution(samples, label, stats, current_output_dir, timestamp)
+        save_statistics_to_file(label, stats, timing_data, current_output_dir, timestamp)
 
 
 if __name__ == "__main__":

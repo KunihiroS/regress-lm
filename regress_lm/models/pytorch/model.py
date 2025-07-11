@@ -47,6 +47,7 @@ class PyTorchModel(nn.Module, model_base.Model[Tensor]):
       **architecture_kwargs,
   ):
     super().__init__()
+    self.learning_rate = learning_rate
     self.max_input_len = max_input_len
     self.z_loss_coef = z_loss_coef
     self.device = device or torch.device('cpu')
@@ -64,6 +65,11 @@ class PyTorchModel(nn.Module, model_base.Model[Tensor]):
     # Pre-compute the constraint masks for the decoder.
     self.register_buffer(
         'decoder_constraint_masks', self._create_decoder_constraint_masks()
+    )
+
+    # オプティマイザをモデルの一部として初期化
+    self.optimizer = optim.Adafactor(
+        filter(lambda p: p.requires_grad, self.parameters()), lr=self.learning_rate
     )
 
   def compute_loss_and_metrics(
@@ -262,16 +268,17 @@ def _train_step(
 class PyTorchFineTuner(model_base.FineTuner):
   """PyTorch implementation of a local finetuner."""
 
-  def __init__(
-      self, model: PyTorchModel, optimizer: optim.Optimizer | None = None
-  ):
-    self.model = model
+  def __init__(self, model: PyTorchModel, optimizer, batch_size: int = 32):
+    """Initializes the finetuner.
 
-    if optimizer is None:
-      optimizer = optim.Adafactor(
-          filter(lambda p: p.requires_grad, self.model.parameters()), lr=1e-4
-      )
+    Args:
+      model: A `PyTorchModel` instance.
+      optimizer: An initialized optimizer instance.
+      batch_size: The batch size for fine-tuning.
+    """
+    self.model = model
     self.optimizer = optimizer
+    self.batch_size = batch_size
 
   def fine_tune(
       self,
@@ -288,8 +295,13 @@ class PyTorchFineTuner(model_base.FineTuner):
     rng = np.random.RandomState(seed)
 
     valid_losses = []
-    state = self.model.state_dict()
+    # モデルとオプティマイザの状態を辞書で管理
+    state = {
+        'model_state_dict': self.model.state_dict(),
+        'optimizer_state_dict': self.optimizer.state_dict(),
+    }
     prev_state = state
+
     for epoch in range(max_epochs):
       self.model.eval()  # Eval mode.
 
@@ -319,7 +331,14 @@ class PyTorchFineTuner(model_base.FineTuner):
         inds = all_indices[i * batch_size : (i + 1) * batch_size]
         batch = {k: v[inds].to(self.model.device) for k, v in train_tensors.items()}
         _train_step(self.model, self.optimizer, batch)
-      state = self.model.state_dict()
+      
+      # モデルとオプティマイザの両方の状態を更新
+      state = {
+          'model_state_dict': self.model.state_dict(),
+          'optimizer_state_dict': self.optimizer.state_dict(),
+      }
 
-    self.model.load_state_dict(state)
+    # 最終的な状態をモデルとオプティマイザにロード
+    self.model.load_state_dict(state['model_state_dict'])
+    self.optimizer.load_state_dict(state['optimizer_state_dict'])
     logging.info("ファインチューニングの全エポックが完了しました。")

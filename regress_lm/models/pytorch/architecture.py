@@ -268,11 +268,38 @@ class EncoderDecoder(nn.Module):
         batch_first=True,
         norm_first=True,
     )
+    self.transformer = nn.Transformer(
+        **{
+            "d_model": d_model,
+            "nhead": nhead,
+            "dim_feedforward": dim_feedforward,
+            "dropout": dropout,
+            "batch_first": True,
+            "norm_first": True
+        }
+    )
+    self.hparams = {
+        "d_model": d_model,
+        "nhead": nhead,
+        "dim_feedforward": dim_feedforward,
+        "dropout": dropout,
+        "batch_first": True,
+        "norm_first": True
+    }
     self.decoder = nn.TransformerDecoder(
         decoder_layer, num_layers=num_decoder_layers
     )
 
     self.generator = nn.Linear(d_model, len(decoder_vocab))
+
+    self.hparams = {
+        'd_model': d_model,
+        'nhead': nhead,
+        'num_encoder_layers': num_encoder_layers,
+        'num_decoder_layers': num_decoder_layers,
+        'dim_feedforward': dim_feedforward,
+        'dropout': dropout,
+    }
 
   def _generate_causal_mask(self, sz: int) -> torch.Tensor:
     return torch.triu(torch.full((sz, sz), float("-inf")), diagonal=1)

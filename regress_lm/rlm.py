@@ -65,8 +65,40 @@ class RegressLM:
     )
     model.to(device)
 
-    fine_tuner = pytorch_model.PyTorchFineTuner(model)
+    fine_tuner = pytorch_model.PyTorchFineTuner(model=model, optimizer=model.optimizer)
     return cls(model, fine_tuner)
+
+  def save_checkpoint(self, path: str):
+    """モデルの状態とオプティマイザの状態をファイルに保存する。"""
+    logging.info(f"チェックポイントを {path} に保存しています...")
+    torch.save({
+        'model_state_dict': self.model.state_dict(),
+        'optimizer_state_dict': self.model.optimizer.state_dict(),
+        'model_kwargs': self.model.encoder_decoder.hparams
+    }, path)
+    logging.info("チェックポイントの保存が完了しました。")
+
+  def load_checkpoint(self, path: str):
+    """ファイルからモデルの状態とオプティマイザの状態を読み込む。"""
+    logging.info(f"チェックポイントを {path} から読み込んでいます...")
+    checkpoint = torch.load(path, map_location=self.model.device)
+    
+    # モデルのアーキテクチャが保存されたものと一致するかを簡易的に確認
+    saved_kwargs = checkpoint.get('model_kwargs', {})
+    current_kwargs = self.model.encoder_decoder.hparams
+    if saved_kwargs and saved_kwargs != current_kwargs:
+        logging.warning("警告: モデルのパラメータがチェックポイントと一致しません。")
+        logging.warning(f"  - 保存されたパラメータ: {saved_kwargs}")
+        logging.warning(f"  - 現在のモデルパラメータ: {current_kwargs}")
+
+    self.model.load_state_dict(checkpoint['model_state_dict'])
+    self.model.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    # fine_tunerがロードされたオプティマイザを確実に参照するように設定
+    self.fine_tuner.optimizer = self.model.optimizer
+    # fine_tunerがロードされたオプティマイザを確実に参照するように設定
+    self.fine_tuner.optimizer = self.model.optimizer
+    self.model.to(self.model.device)
+    logging.info("チェックポイントの読み込みが完了しました。")
 
   def sample(
       self, xs: Sequence[core.ExampleInput], num_samples: int
