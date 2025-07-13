@@ -297,6 +297,7 @@ This histogram shows the overall trend of the model's predictions for a given in
 - `--eval-set-file` (path): Path to the master evaluation YAML file. **This argument is required and used ONLY when creating a new job (i.e., when the `--new` flag is present).**
 - `--base-model` (path, optional): Path to a pre-trained base model to start a new job from.
 - `--new` (flag, optional): **Explicitly declares the intention to create a new job.** If this flag is present, the script will create a new job directory. If a job with the same name already exists, the script will exit with an error to prevent accidental overwrites.
+- `--max-epochs` (integer, optional): The number of epochs for fine-tuning. Defaults to 10.
 
 **Behavior:**
 1.  **If `--new` flag is present (New Job Creation):**

@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 import shutil
 import yaml
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 import time
 import numpy as np
@@ -144,7 +144,7 @@ def generate_tuning_summary(
         'overview': {
             'job_name': job_name,
             'version_created': version,
-            'timestamp': datetime.utcnow().isoformat() + 'Z',
+            'timestamp': datetime.now(timezone.utc).isoformat(),
             'base_model_used': str(base_model_path) if base_model_path else 'default',
         },
         'data_sources': {
@@ -201,7 +201,7 @@ def update_history(history_file: Path, version: int, finetune_data_path: Path, b
 
     new_event = {
         'event_type': 'tuning',
-        'timestamp': datetime.utcnow().isoformat() + 'Z',
+        'timestamp': datetime.now(timezone.utc).isoformat(),
         'version': version,
         'input_data_dir': str(finetune_data_path.parent),
         'base_model': str(base_model_path) if base_model_path else 'default',
@@ -243,6 +243,12 @@ def main():
         "--new",
         action="store_true",
         help="Explicitly create a new job."
+    )
+    parser.add_argument(
+        "--max-epochs",
+        type=int,
+        default=10,
+        help="Number of epochs for fine-tuning."
     )
 
     args = parser.parse_args()
@@ -350,7 +356,7 @@ def main():
 
     print("Starting fine-tuning...")
     start_time = time.time()
-    model.fine_tune(train_data, max_epochs=10, batch_size=4)
+    model.fine_tune(train_data, max_epochs=args.max_epochs, batch_size=4)
     end_time = time.time()
     tuning_duration = end_time - start_time
     print(f"Fine-tuning complete in {tuning_duration:.2f} seconds.")
