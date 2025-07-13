@@ -2,8 +2,6 @@
 
 ## Scope of Responsibility
 
-This section clarifies the roles and responsibilities between the user and the software (`scripts/tune.py`, `scripts/infer.py`).
-
 ### User Responsibilities (Strategy & Preparation)
 
 - **Dataset Preparation**: The user is responsible for creating and preparing dataset files. This involves:
@@ -139,6 +137,11 @@ For inference, each entry in the list **must** contain only the `text` key. The 
 - **Filename:** `tuning_summary.yaml`
 - **Format:** A structured report of the tuning process results.
 
+#### Interpretation
+This file serves as the primary "report card" for a tuning run. It provides a high-level, quantitative overview of the model's performance.
+- **`performance_metrics`**: These are standard academic metrics to measure prediction accuracy. Lower `mse` (Mean Squared Error) and `mae` (Mean Absolute Error) are better. `r2_score` closer to 1.0 indicates a better fit.
+- **`prediction_error_analysis`**: This section reveals the model's tendencies. The `mean` of the error shows if the model has a systematic bias (e.g., a positive mean means it tends to over-predict). The `std_dev` (Standard Deviation) shows how consistent the errors are; a smaller value is better.
+
 ```yaml
 overview:
   job_name: {job_name}
@@ -204,25 +207,18 @@ output_files:
   prediction_histogram: "{path_to_distribution_png}"
 ```
 
-### 6. Distribution Plot (`distribution.png`)
-
-- **Filename:** `distribution.png`
-- **Type:** PNG Image
-- **Content:** A histogram visualizing the distribution of prediction errors.
-- **Purpose:** To provide a quick visual understanding of the model's performance, including its bias and the spread of its errors.
-
-#### Plot Specifications:
-
-- **Data:** The plot is generated from the set of prediction errors, where `error = actual_value - predicted_value` for each data point in the evaluation set.
-- **Title:** "Prediction Error Distribution"
-- **X-axis Label:** "Prediction Error"
-- **Y-axis Label:** "Frequency"
-- **Appearance:** The histogram should clearly show the frequency of errors across different bins.
-
 ### 5. Prediction Results (`predictions.yaml`)
 
 - **Filename:** `predictions.yaml`
 - **Format:** A list of individual prediction results, including distribution statistics.
+
+#### Interpretation
+This file allows for a detailed, micro-level analysis of the model's predictions. It's used to investigate exactly which data points the model performed well or poorly on.
+- **`actual_value`**: The ground-truth value for comparison.
+- **`prediction_summary`**: This block shows the statistics of the multiple prediction samples generated for a single input.
+  - **`mean`**: This is the representative predicted value for the data point.
+  - **`std_dev`**: This indicates the model's uncertainty or "confidence" for this specific prediction. A high standard deviation means the model's predictions for this item were scattered and inconsistent.
+- **`error`**: This field (`mean - actual_value`) makes it easy to sort and find the data points with the largest prediction errors.
 
 ```yaml
 predictions:
@@ -243,6 +239,51 @@ predictions:
 
   # In an inference run, 'actual_value' and 'error' keys will be omitted.
 ```
+
+### 6. Distribution Plot (`distribution.png`)
+
+- **Filename:** `distribution.png`
+- **Type:** PNG Image
+- **Purpose:** To provide a quick visual understanding of the model's predictions. The meaning of the plot differs depending on the context (tuning vs. inference).
+
+#### In a Tuning Context (Error Distribution)
+
+- **Content:** A histogram visualizing the distribution of **prediction errors** (`actual_value - predicted_value`).
+
+##### Interpretation
+This histogram provides a quick, visual summary of the model's prediction accuracy, complementing the statistics in `tuning_summary.yaml`.
+- **X-axis (Prediction Error)**: Shows how far off a prediction was from the actual value. `0` represents a perfect prediction.
+- **Y-axis (Frequency)**: Shows how many predictions fell into a particular error range.
+
+**What to Look For:**
+- **Ideal Shape**: A tall, narrow spike centered at `0`. This indicates that most predictions were highly accurate with very little variance.
+- **Bias**: If the entire histogram is shifted to the left or right of `0`, it signifies a systematic bias (the model consistently under-predicts or over-predicts).
+- **Variance**: A wide, flat histogram means the predictions are inconsistent and spread out.
+- **Outliers**: Bars far from the center represent specific predictions that were very wrong. These can be investigated further using `predictions.yaml`.
+
+##### Plot Specifications:
+- **Title:** "Prediction Error Distribution"
+- **X-axis Label:** "Prediction Error"
+- **Y-axis Label:** "Frequency"
+
+#### In an Inference Context (Prediction Distribution)
+
+- **Content:** A histogram visualizing the distribution of the **final predicted values** themselves.
+
+##### Interpretation
+This histogram shows the overall trend of the model's predictions for a given inference dataset. It helps in understanding the nature of the outputs without ground truth.
+- **X-axis (Predicted Value)**: The range of values the model predicted.
+- **Y-axis (Frequency)**: How many predictions fell into a particular value range.
+
+**What to Look For:**
+- **Central Tendency**: Where the predictions are centered. This shows the most common output value.
+- **Spread (Variance)**: A narrow distribution means the model's predictions are very consistent across different inputs. A wide distribution suggests the outputs vary significantly.
+- **Modality**: A single peak (unimodal) suggests a consistent prediction pattern. Multiple peaks (multimodal) might indicate the model is identifying different subgroups within the inference data.
+
+##### Plot Specifications:
+- **Title:** "Prediction Value Distribution"
+- **X-axis Label:** "Predicted Value"
+- **Y-axis Label:** "Frequency"
 
 ---
 
@@ -274,15 +315,16 @@ predictions:
     - Copies the master `standard_eval_set` to `finetuning/data/v<n>/eval/{job_name}_v{n}_eval.yaml`.
     - Copies the content of `--data-dir` to `finetuning/data/v<n>/finetunes/`.
     - On the first run, copies `--eval-set-dir` to `finetuning/data/standard_eval_set/`.
-    - Copies the master `standard_eval_set` to `finetuning/data/v<n>/eval/`.
 4.  **Tuning Process:**
     - Loads the latest checkpoint (`checkpoint_v<n-1>.pt`). If it's the first run, it loads the `--base-model` or the default model.
     - Fine-tunes the model using the data in `finetuning/data/v<n>/finetunes/`.
     - Saves the newly trained model as `checkpoints/checkpoint_v<n>.pt`.
 5.  **Evaluation & Reporting:**
     - Evaluates the new model's performance using the data in `finetuning/data/v<n>/eval/`.
-    - Generates `tuning_summary.txt`, `distribution.png`, and `predictions.csv` in `finetuning/results/v<n>/`.
+    - Generates `tuning_summary.yaml`, `distribution.png`, and `predictions.yaml` in `finetuning/results/v<n>/`.
     - Appends a summary of the run to `history.yaml`.
+
+---
 
 ## `infer.py`
 
@@ -292,7 +334,7 @@ predictions:
 - `--job-name` (string, required): The name of the job.
 - `--checkpoint-version` (integer, required): The version number of the checkpoint to use for inference.
 - `--data-file` (path, required): Path to the single YAML file containing the data for inference.
-- `--run-id` (string, required): A unique identifier for this inference run (e.g., a timestamp like `20250713_003000`). as the directory name.
+- `--run-id` (string, required): A unique identifier for this inference run (e.g., `20250713_003000`) to be used as the directory name.
 
 **Behavior:**
 1.  Creates the run directory: `inference_runs/{run_id}/`.
@@ -302,7 +344,7 @@ predictions:
     - Loads the specified model from `checkpoints/checkpoint_v<version>.pt`.
     - Runs inference on the data located in `inference_runs/{run_id}/data/`.
 4.  **Reporting:**
-    - Generates `inference_report.txt`, `distribution.png` (if applicable), and `predictions.csv` in `inference_runs/{run_id}/results/`.
+    - Generates `inference_report.yaml`, `distribution.png` (if applicable), and `predictions.yaml` in `inference_runs/{run_id}/results/`.
     - Appends a summary of the run to `history.yaml`.
 
 ---
@@ -353,3 +395,51 @@ The MCP server, tentatively named `regresslm-mcp`, will provide the following to
     - `data_dir` (string): Path to the data for inference.
     - `run_id` (string): A unique identifier for this inference run.
 - **Returns:** A dictionary containing the path to the results.
+
+---
+
+## Glossary of Terms
+
+This section explains the key metrics and concepts used in the evaluation reports.
+
+### Performance Metrics
+
+- **MSE (Mean Squared Error)**
+  - **What it is:** A standard way to measure the average squared difference between the estimated values and the actual value.
+  - **Interpretation:** It heavily penalizes larger errors. A lower value is better. A value of 0 means the model is perfect.
+
+- **MAE (Mean Absolute Error)**
+  - **What it is:** The average of the absolute differences between the predictions and the actual values.
+  - **Interpretation:** It's easier to interpret than MSE as it's in the same units as the original data. A lower value is better.
+
+- **R² Score (Coefficient of Determination)**
+  - **What it is:** A statistical measure of how well the regression predictions approximate the real data points.
+  - **Interpretation:** A score of 1.0 indicates that the model perfectly predicts the data. A score of 0 indicates the model is no better than just predicting the mean of the actual values.
+
+### Error Concepts
+
+- **Prediction Error**
+  - **What it is:** The simple difference between a single prediction and its corresponding actual value (`Prediction - Actual`).
+  - **Interpretation:** It shows the direction and magnitude of a single miss. A positive error is an over-prediction; a negative error is an under-prediction.
+
+- **Bias**
+  - **What it is:** The tendency of a model to consistently predict higher or lower than the actual value.
+  - **Interpretation:** In the reports, the `mean` of the `prediction_error_analysis` indicates bias. A value far from zero suggests a systematic bias.
+
+- **Variance**
+  - **What it is:** A measure of how much a model's predictions would change if it were trained on different data.
+  - **Interpretation:** High variance is indicated by a wide, flat histogram in `distribution.png` or a large `std_dev` in the `prediction_error_analysis`.
+
+### Prediction Distribution Concepts
+
+- **Prediction Distribution**
+  - **What it is:** For a single input, the model can generate multiple different predictions (samples). The collection of these samples forms a distribution.
+  - **Interpretation:** This distribution reveals the model's certainty for a given prediction.
+
+- **Mean (of prediction distribution)**
+  - **What it is:** The average of the multiple prediction samples taken for a single input.
+  - **Interpretation:** This is used as the single, most representative prediction for that input.
+
+- **Standard Deviation (std_dev)**
+  - **What it is:** A measure of the spread or dispersion of the prediction samples for a single input.
+  - **Interpretation:** This indicates the model's "confidence" or consistency. A low `std_dev` means the model consistently produced similar predictions (high confidence). A high `std_dev` means the predictions were scattered (low confidence).
