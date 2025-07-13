@@ -256,13 +256,14 @@ def _train_step(
     model: PyTorchModel,
     optimizer: optim.Optimizer,
     examples: dict[str, torch.Tensor],
-):
-  """Performs a single training step."""
+) -> float:
+  """Performs a single training step and returns the loss."""
   model.train()
   optimizer.zero_grad()
   loss, _ = model.compute_loss_and_metrics(examples)
   loss.backward()
   optimizer.step()
+  return loss.item()
 
 
 class PyTorchFineTuner(model_base.FineTuner):
@@ -318,19 +319,23 @@ class PyTorchFineTuner(model_base.FineTuner):
       valid_losses.append(avg_val_loss)
 
       if _detect_overfitting(valid_losses):
-        logging.info(f"エポック {epoch + 1}: 過学習を検知したため、トレーニングを早期終了します。")
+        print(f"Epoch {epoch + 1}: Overfitting detected. Early stopping.")
         state = prev_state
         break
 
       prev_state = state
       num_batches = math.ceil(len(examples) / batch_size)
       all_indices = rng.permutation(len(examples))
-      logging.info(f"エポック {epoch + 1}/{max_epochs} を開始します ({num_batches} バッチ)")
+      print(f"Epoch {epoch + 1}/{max_epochs} starting ({num_batches} batches)")
+      total_train_loss = 0.0
       for i in range(num_batches):
-        logging.debug(f"  バッチ {i + 1}/{num_batches} を処理中...")
         inds = all_indices[i * batch_size : (i + 1) * batch_size]
         batch = {k: v[inds].to(self.model.device) for k, v in train_tensors.items()}
-        _train_step(self.model, self.optimizer, batch)
+        loss = _train_step(self.model, self.optimizer, batch)
+        total_train_loss += loss
+        print(f"  Batch {i + 1}/{num_batches}, Loss: {loss:.4f}")
+      avg_train_loss = total_train_loss / num_batches
+      print(f"Epoch {epoch + 1} complete. Avg Train Loss: {avg_train_loss:.4f}, Validation Loss: {avg_val_loss:.4f}")
       
       # モデルとオプティマイザの両方の状態を更新
       state = {
@@ -341,4 +346,4 @@ class PyTorchFineTuner(model_base.FineTuner):
     # 最終的な状態をモデルとオプティマイザにロード
     self.model.load_state_dict(state['model_state_dict'])
     self.optimizer.load_state_dict(state['optimizer_state_dict'])
-    logging.info("ファインチューニングの全エポックが完了しました。")
+    print("All fine-tuning epochs completed.")

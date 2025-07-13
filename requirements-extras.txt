@@ -1,6 +1,7 @@
 # For data processing
 pandas
 numpy
+scikit-learn
 
 # For visualization
 matplotlib

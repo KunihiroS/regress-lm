@@ -1,6 +1,27 @@
-# Script Specifications
+# Project Specifications
 
-## Structure
+## Scope of Responsibility
+
+This section clarifies the roles and responsibilities between the user and the software (`scripts/tune.py`, `scripts/infer.py`).
+
+### User Responsibilities (Strategy & Preparation)
+
+- **Dataset Preparation**: The user is responsible for creating and preparing dataset files. This involves:
+  - Sourcing raw data.
+  - Deciding on the data strategy (e.g., which data points to include for a specific tuning or evaluation session).
+  - Formatting the data into a single YAML file that conforms to the specifications outlined in the "Input Data Format" section below.
+- **Execution Command**: The user initiates the automated workflow by running the appropriate script (`tune.py` or `infer.py`) with the correct arguments (e.g., job name, path to the prepared dataset file).
+
+### Software Responsibilities (Automation of Routine Tasks)
+
+Once initiated by the user, the software is responsible for the entire automated workflow:
+
+- **Directory Management**: Automatically creates and manages the complete, versioned directory structure as defined in the `Structure` section.
+- **Data Handling**: Copies the user-provided dataset files into the managed job directory with the standardized naming convention.
+- **Model & Checkpoint Lifecycle**: Loads the appropriate model, runs the fine-tuning or inference process, and saves the resulting checkpoints.
+- **Result Generation**: (Future) Generates all report files (`tuning_summary.yaml`, `predictions.yaml`, etc.) as specified.
+
+## Job Structure
 
 ```
 work/jobs/{job_name}/
@@ -25,7 +46,7 @@ work/jobs/{job_name}/
 │   │   │   │   └── {job_name}_v2_finetune.yaml
 │   │   │   └── eval/
 │   │   │       └── {job_name}_v2_eval.yaml
-│   │   └── standard_eval_set/
+│   │   └── standard_eval_set/         # Master evaluation set for the entire job
 │   │       └── standard_eval.yaml
 │   │
 │   └── results/
@@ -53,25 +74,40 @@ work/jobs/{job_name}/
 
 This section defines the structure of all YAML data files used and generated within the project. The file extension `.yaml` is used for all YAML files to maintain consistency.
 
-### 1. Input Data
+### 1. Input Data Format
 
 - **Principle:** One YAML file represents a complete dataset (a collection of data points).
-- **Format:** The file contains a list of text-value pairs.
+- **Format:** The data format is distinct for training/evaluation versus inference.
 
-#### Fine-tuning & Evaluation Data (`finetuning/data/...`)
-- **Fine-tuning Data:** The file in `finetuning/data/v{n}/finetunes/` is named `{job_name}_v{n}_finetune.yaml`.
-- **Evaluation Data:** The file in `finetuning/data/v{n}/eval/` is named `{job_name}_v{n}_eval.yaml`. This is copied from a master file (e.g., `standard_eval.yaml`) in the `standard_eval_set` directory.
-
-#### Inference Data (`inference_runs/...`)
-- **Inference Data:** The file in `inference_runs/{run_id}/data/` is named `{job_name}_checkpoint_v{m}_run_{run_id}_inference.yaml`.
+#### Fine-tuning & Evaluation Data Format
+For fine-tuning and evaluation, each entry in the list **must** contain both `text` and `value` keys.
 
 ```yaml
-# Example Input Data Format
+# Fine-tuning/Evaluation Data Example
 - text: "Apple's quarterly earnings exceeded expectations by 5%."
   value: 5.0
 - text: "The new iPhone model saw a 10% increase in pre-orders."
   value: 10.0
 ```
+
+#### Inference Data Format
+For inference, each entry in the list **must** contain only the `text` key. The `value` key must be omitted.
+
+```yaml
+# Inference Data Example
+- text: "Market sentiment is positive following the latest tech conference."
+- text: "New regulations are expected to impact the automotive sector."
+```
+
+- **File Naming and Usage:**
+  - **Fine-tuning Data:** A user-provided dataset file (using the Fine-tuning/Evaluation format) passed to `tune.py` via the `--data-file` argument.
+  - **Evaluation Data:**
+    - **Principle:** To ensure a fair and consistent comparison of model performance across different versions (v1, v2, ...), the evaluation dataset is fixed for the entire lifecycle of a job.
+    - **Master Copy (`standard_eval.yaml`):** When a job is first created, the file provided via `--eval-set-file` is copied to `finetuning/data/standard_eval_set/standard_eval.yaml`. This file acts as the single, immutable "source of truth" for evaluation for the entire job.
+    - **Per-Version Snapshot (`.../v{n}/eval/`):** The existence of a separate `eval` directory for each version, containing a copy of the master evaluation set, is a deliberate design choice to guarantee **long-term reproducibility and auditability**.
+      - **Purpose (Why this exists):** It creates a self-contained, immutable historical record. Each version folder (e.g., `v2/`) acts as a "time capsule," containing the *exact* training data and evaluation data used for that specific run. This prevents future modifications to the master `standard_eval.yaml` from retroactively corrupting the historical record of past versions.
+      - **Behavior (What happens):** During each tuning run, the script automatically copies the master `standard_eval.yaml` into the corresponding version's `eval` directory. This ensures that anyone can audit or perfectly reproduce a past version's results by only looking inside that version's directory, without ambiguity.
+  - **Inference Data:** A user-provided dataset file (using the Inference format) passed to a future `infer.py` script.
 
 ### 2. Job History (`history.yaml`)
 
@@ -168,6 +204,21 @@ output_files:
   prediction_histogram: "{path_to_distribution_png}"
 ```
 
+### 6. Distribution Plot (`distribution.png`)
+
+- **Filename:** `distribution.png`
+- **Type:** PNG Image
+- **Content:** A histogram visualizing the distribution of prediction errors.
+- **Purpose:** To provide a quick visual understanding of the model's performance, including its bias and the spread of its errors.
+
+#### Plot Specifications:
+
+- **Data:** The plot is generated from the set of prediction errors, where `error = actual_value - predicted_value` for each data point in the evaluation set.
+- **Title:** "Prediction Error Distribution"
+- **X-axis Label:** "Prediction Error"
+- **Y-axis Label:** "Frequency"
+- **Appearance:** The histogram should clearly show the frequency of errors across different bins.
+
 ### 5. Prediction Results (`predictions.yaml`)
 
 - **Filename:** `predictions.yaml`
@@ -202,12 +253,21 @@ predictions:
 **Arguments:**
 - `--job-name` (string, required): The name of the job to operate on.
 - `--data-file` (path, required): Path to the single YAML file containing the data for this fine-tuning session.
-- `--eval-set-file` (path, required for new jobs): Path to the master evaluation YAML file.
+- `--eval-set-file` (path): Path to the master evaluation YAML file. **This argument is required and used ONLY when creating a new job (i.e., when the `--new` flag is present).**
 - `--base-model` (path, optional): Path to a pre-trained base model to start a new job from.
+- `--new` (flag, optional): **Explicitly declares the intention to create a new job.** If this flag is present, the script will create a new job directory. If a job with the same name already exists, the script will exit with an error to prevent accidental overwrites.
 
 **Behavior:**
-1.  Checks if the job directory `work/jobs/{job_name}` exists. If not, it creates the entire directory structure (initializes the job).
-2.  Determines the new version number (e.g., `v1` for a new job, or `v(n+1)` for an existing one).
+1.  **If `--new` flag is present (New Job Creation):**
+    - The script operates in "new job" mode.
+    - It checks if `work/jobs/{job_name}` already exists. If it does, the script exits with an error to prevent accidental collision.
+    - If it does not exist, it creates the entire directory structure for `v1`.
+    - `--eval-set-file` is required in this mode.
+2.  **If `--new` flag is NOT present (Existing Job Continuation):**
+    - The script operates in "continue job" mode.
+    - It checks if `work/jobs/{job_name}` exists. If it does NOT, the script exits with an error, prompting the user to use `--new` if they intended to create a new job.
+    - If it exists, it determines the next version number (e.g., `v(n+1)`) and proceeds with the fine-tuning process.
+    - `--eval-set-file` is ignored in this mode.
 3.  **Data Handling:**
     - Copies the content of `--data-file` to `finetuning/data/v<n>/finetunes/{job_name}_v{n}_finetune.yaml`.
     - On the first run, copies `--eval-set-file` to `finetuning/data/standard_eval_set/standard_eval.yaml`.
