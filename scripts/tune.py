@@ -368,7 +368,7 @@ def main():
     # --- Evaluation ---
     eval_data = load_data_from_yaml(eval_dest)
     # Generate multiple samples per prediction for detailed analysis
-    eval_results = evaluate_model(model, eval_data, num_prediction_samples=100)
+    eval_results = evaluate_model(model, eval_data, num_prediction_samples=128)
 
     if eval_results is not None:
         results_path = job_path / 'finetuning' / 'results' / f'v{version}'
