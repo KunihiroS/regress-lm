@@ -444,3 +444,40 @@ This section explains the key metrics and concepts used in the evaluation report
 - **Standard Deviation (std_dev)**
   - **What it is:** A measure of the spread or dispersion of the prediction samples for a single input.
   - **Interpretation:** This indicates the model's "confidence" or consistency. A low `std_dev` means the model consistently produced similar predictions (high confidence). A high `std_dev` means the predictions were scattered (low confidence).
+
+---
+
+## Project Architecture Summary (2025-07-14)
+
+This project implements a "Text-to-Float Regression" model using a Language Model (LM) architecture. The core idea is to treat numerical prediction as a language generation task.
+
+### Key Mechanisms
+
+1.  **Numerical Tokenization (`P10Tokenizer`)**: Floats (e.g., `0.05`, `-1.2e-3`) are decomposed into a sequence of tokens representing their sign, mantissa, and exponent. This allows the LM to process numbers as if they were text.
+
+2.  **Learning vs. Evaluation Distinction**: The project maintains a clear separation between the training and evaluation phases:
+    *   **Learning (`fine_tune`)**: The model is trained by minimizing the cross-entropy loss at the token level. The goal is to teach the model which sequence of numerical tokens to generate for a given input text.
+    *   **Evaluation (`sample`)**: Model performance is assessed by sampling multiple predictions (e.g., 128) from the model's output distribution for a single input. This provides not just a point estimate but also a measure of the model's confidence (variance).
+
+3.  **Analysis of Prediction Distribution**: The primary method for evaluation is the statistical analysis of the sampled prediction distribution.
+    *   The **mean** of the distribution is used as the final prediction.
+    *   The **standard deviation** indicates the model's certainty.
+    *   Key artifacts like `predictions.yaml` and `distribution.png` are generated from this distribution analysis.
+
+---
+
+## Agent Performance & Learning Summary (2025-07-14)
+
+This section documents the root cause analysis of the agent's incorrect assessments regarding the `tune.py` script's evaluation logic.
+
+### Root Cause Analysis
+
+1.  **Confirmation Bias**: The agent started with an incorrect hypothesis ("`tune.py` evaluation is flawed") and subsequently interpreted all evidence through that lens, ignoring facts to the contrary.
+2.  **Lack of Holistic Analysis**: The agent analyzed the `fine_tune` method in isolation without examining its calling context within the `tune.py` script. This led to missing the fact that the correct, sample-based evaluation was already being performed in the main execution block.
+3.  **Misinterpretation of User Intent**: The agent misinterpreted the user's concerns about evaluation metrics as a fundamental flaw in the calculation logic, rather than a more nuanced question about the completeness of reported metrics or the cause of abnormal results.
+
+### Corrective Actions & Go-Forward Strategy
+
+*   **Holistic First**: Always analyze the complete end-to-end script execution flow before diagnosing a specific component.
+*   **Context is Key**: When reviewing a function, always inspect its call sites to understand its role and context within the broader system.
+*   **Clarify Intent**: Proactively confirm the underlying "why" behind a user's query before proposing solutions.
