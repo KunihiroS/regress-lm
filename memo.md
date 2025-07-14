@@ -19,6 +19,17 @@ Once initiated by the user, the software is responsible for the entire automated
 - **Model & Checkpoint Lifecycle**: Loads the appropriate model, runs the fine-tuning or inference process, and saves the resulting checkpoints.
 - **Result Generation**: (Future) Generates all report files (`tuning_summary.yaml`, `predictions.yaml`, etc.) as specified.
 
+## Project Directory Structure
+
+This section outlines the purpose of each top-level directory in the project root.
+
+-   **`regress_lm/`**: Contains the core Python source code for the `regress-lm` library, including model definitions and core logic.
+-   **`scripts/`**: Holds executable Python scripts for interacting with the project, such as `tune.py` and `infer.py`.
+    -   **`scripts/archived_utils/`**: Contains deprecated utility scripts that are no longer part of the main workflow but are kept for historical reference.
+-   **`datasets/`**: Stores the master datasets as samples that serve as the single source of truth for all training and evaluation. These datasets are version-controlled with Git to ensure reproducibility.
+-   **`work/`**: The primary working directory for all experiments. All outputs from `tune.py` and `infer.py` (checkpoints, results, logs) are stored here, organized by job name. This directory is **intentionally excluded** from Git version control via `.gitignore`.
+-   **`legacy_poc_and_tests/`**: Archives old Proof-of-Concept (PoC) scripts, notebooks, and data from the initial exploratory phase of the project. This directory is **intentionally excluded** from Git version control and is not used in the current workflow.
+
 ## Job Structure
 
 ```
