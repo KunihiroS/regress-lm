@@ -31,3 +31,6 @@ work/
 
 # Legacy POC and Tests
 legacy_poc_and_tests/
+
+# Datasets
+datasets/
